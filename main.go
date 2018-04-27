@@ -13,12 +13,13 @@ import (
 	"github.com/justwatchcom/elasticsearch_exporter/collector"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/version"
+	"net"
 )
 
 func main() {
 	var (
 		Name                 = "elasticsearch_exporter"
-		listenAddress        = flag.String("web.listen-address", ":9108", "Address to listen on for web interface and telemetry.")
+		listenAddress        = flag.String("unix-sock", "/dev/shm/elasticsearch_exporter.sock", "Address to listen on for unix sock access and telemetry.")
 		metricsPath          = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
 		esURI                = flag.String("es.uri", "http://localhost:9200", "HTTP API address of an Elasticsearch node.")
 		esTimeout            = flag.Duration("es.timeout", 5*time.Second, "Timeout for trying to get stats from Elasticsearch.")
@@ -75,20 +76,19 @@ func main() {
 		prometheus.MustRegister(collector.NewIndices(logger, httpClient, esURL, *esExportShards))
 	}
 
-	http.Handle(*metricsPath, prometheus.Handler())
-	http.HandleFunc("/", IndexHandler(*metricsPath))
-
-	level.Info(logger).Log(
-		"msg", "starting elasticsearch_exporter",
-		"addr", *listenAddress,
-	)
-
-	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
-		level.Error(logger).Log(
-			"msg", "http server quit",
-			"err", err,
-		)
+	mux := http.NewServeMux()
+	mux.Handle(*metricsPath, prometheus.Handler())
+	mux.HandleFunc("/", IndexHandler(*metricsPath))
+	server := http.Server{
+		Handler: mux, // http.DefaultServeMux,
 	}
+	os.Remove(*listenAddress)
+
+	listener, err := net.Listen("unix", *listenAddress)
+	if err != nil {
+		panic(err)
+	}
+	server.Serve(listener)
 }
 
 // IndexHandler returns a http handler with the correct metricsPath
